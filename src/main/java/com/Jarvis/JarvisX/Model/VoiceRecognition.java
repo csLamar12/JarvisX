@@ -1,4 +1,4 @@
-package com.Jarvis.JarvisX.Controllers;
+package com.Jarvis.JarvisX.Model;
 
 import com.google.api.gax.core.FixedCredentialsProvider;
 import com.google.auth.oauth2.GoogleCredentials;
@@ -13,28 +13,24 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
 
-
-/***
- * The boilerplate code for the API was copied from the console.cloud.google.com website and edited
- * for our use case. Our use case being transcribing audio from the device's microphone.
- */
 public class VoiceRecognition {
     private static final Logger log = LogManager.getLogger(VoiceRecognition.class);
+    private static String transcription;
+    private static boolean listening = false;
 
-    /** Performs microphone streaming speech recognition with dynamic end. */
-    public static void streamingMicRecognize(String jsonFileName) throws Exception {
+    public static String streamingMicRecognize(String jsonKey) throws Exception {
 
         ResponseObserver<StreamingRecognizeResponse> responseObserver = null;
         try {
-            InputStream credentialsStream = VoiceRecognition.class.getClassLoader().getResourceAsStream(jsonFileName);
-            if (credentialsStream == null) {
-                throw new IOException("Credentials file not found: " + jsonFileName);
+            InputStream speechCredentialsStream = VoiceRecognition.class.getClassLoader().getResourceAsStream(jsonKey);
+            if (speechCredentialsStream == null) {
+                throw new IOException("Speech Credentials file not found: " + jsonKey);
             }
-            GoogleCredentials credentials = GoogleCredentials.fromStream(credentialsStream);
-            FixedCredentialsProvider credentialsProvider = FixedCredentialsProvider.create(credentials);
-            SpeechSettings settings = SpeechSettings.newBuilder().setCredentialsProvider(credentialsProvider).build();
+            GoogleCredentials speechCredentials = GoogleCredentials.fromStream(speechCredentialsStream);
+            FixedCredentialsProvider speechCredentialsProvider = FixedCredentialsProvider.create(speechCredentials);
+            SpeechSettings speechSettings = SpeechSettings.newBuilder().setCredentialsProvider(speechCredentialsProvider).build();
 
-            try (SpeechClient client = SpeechClient.create(settings)) {
+            try (SpeechClient speechClient = SpeechClient.create(speechSettings)) {
 
                 responseObserver =
                         new ResponseObserver<StreamingRecognizeResponse>() {
@@ -46,22 +42,33 @@ public class VoiceRecognition {
                                 responses.add(response);
                                 for (StreamingRecognitionResult result : response.getResultsList()) {
                                     if (result.getAlternativesList().size() > 0) {
-                                        System.out.println("Transcript: " + result.getAlternativesList().get(0).getTranscript());
+                                        transcription = result.getAlternativesList().get(0).getTranscript();
+
+                                        if (!listening && transcription.toLowerCase().contains("hey jarvis")) {
+                                            listening = true;
+                                            System.out.println("Listening...");
+                                        }
+
+                                        if (listening) {
+                                            System.out.println("Transcript: " + transcription); // Moved inside listening check.
+                                        }
                                     }
                                 }
                             }
 
                             public void onComplete() {
                                 System.out.println("Streaming completed.");
+                                listening = false;
                             }
 
                             public void onError(Throwable t) {
                                 System.err.println("Error during streaming: " + t);
+                                listening = false;
                             }
                         };
 
                 ClientStream<StreamingRecognizeRequest> clientStream =
-                        client.streamingRecognizeCallable().splitCall(responseObserver);
+                        speechClient.streamingRecognizeCallable().splitCall(responseObserver);
 
                 RecognitionConfig recognitionConfig =
                         RecognitionConfig.newBuilder()
@@ -96,8 +103,8 @@ public class VoiceRecognition {
                 byte[] buffer = new byte[6400];
                 int bytesRead;
 
-                final int SILENCE_THRESHOLD = 100; // Adjust this value
-                final long SILENCE_DURATION_MS = 1000; // Adjust this value
+                final int SILENCE_THRESHOLD = 1000;
+                final long SILENCE_DURATION_MS = 1000;
 
                 long silenceStart = 0;
                 boolean silenceDetected = false;
@@ -116,12 +123,17 @@ public class VoiceRecognition {
                         maxAmplitude = Math.max(maxAmplitude, Math.abs(sample));
                     }
 
+//                    System.out.println(maxAmplitude);
+                    if (listening && transcription.toLowerCase().contains("hey jarvis")){
+                        continue;
+                    }
                     if (maxAmplitude < SILENCE_THRESHOLD) {
                         if (!silenceDetected) {
                             silenceDetected = true;
                             silenceStart = System.currentTimeMillis();
-                        } else if (System.currentTimeMillis() - silenceStart > SILENCE_DURATION_MS) {
+                        } else if (System.currentTimeMillis() - silenceStart > SILENCE_DURATION_MS && listening) {
                             System.out.println("Silence detected. Stopping stream.");
+                            listening = false;
                             break;
                         }
                     } else {
@@ -135,14 +147,8 @@ public class VoiceRecognition {
             }
         } catch (Exception e) {
             log.error("e: ", e);
+            listening = false;
         }
-    }
-
-    public static void main(String[] args) {
-        try {
-            streamingMicRecognize("jarvisx-453820-7c0b5e5a52e5.json"); // Replace with your file name
-        } catch (Exception e) {
-            log.error("Error in main: ", e);
-        }
+        return transcription;
     }
 }
